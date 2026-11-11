@@ -192,14 +192,22 @@ export async function getSoftDeletedPosts(): Promise<Post[]> {
 
 // ===== Typed Post operations for admin editor =====
 
+function toPublishedAt(value?: string): Timestamp | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : Timestamp.fromDate(date);
+}
+
 export async function createPostDraft(
   data: Omit<Post, 'id' | 'createdAt' | 'updatedAt' | 'views'>
 ): Promise<string> {
   try {
     console.log('[Firestore] Creating draft post with data:', data);
-    const { id: _id, ...dataWithoutId } = data as any;
+    const { id: _id, publishedAt, ...dataWithoutId } = data as any;
+    const publishedAtTimestamp = toPublishedAt(publishedAt);
     const docRef = await addDoc(collection(db, POSTS_COLLECTION), {
       ...dataWithoutId,
+      ...(publishedAtTimestamp ? { publishedAt: publishedAtTimestamp } : {}),
       views: 0,
       deletedAt: null,
       createdAt: Timestamp.now(),
@@ -312,11 +320,13 @@ export async function updatePostTyped(
     // and id must never be stored in the document data
     const cleanData: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data)) {
-      if (key === 'id' || value === undefined) continue;
+      if (key === 'id' || key === 'publishedAt' || value === undefined) continue;
       cleanData[key] = value;
     }
+    const publishedAtTimestamp = toPublishedAt(data.publishedAt);
     await updateDoc(docRef, {
       ...cleanData,
+      ...(publishedAtTimestamp ? { publishedAt: publishedAtTimestamp } : {}),
       updatedAt: Timestamp.now(),
     });
   } catch (error) {
@@ -330,9 +340,11 @@ export async function publishPost(postId: string): Promise<void> {
     console.log('[Firestore] Publishing post with ID:', postId);
     const docRef = doc(db, POSTS_COLLECTION, postId);
     console.log('[Firestore] Updating document with status=published...');
+    const snapshot = await getDoc(docRef);
+    const existingPublishedAt = snapshot.data()?.publishedAt;
     await updateDoc(docRef, {
       status: 'published',
-      publishedAt: Timestamp.now(),
+      publishedAt: existingPublishedAt ?? Timestamp.now(),
       updatedAt: Timestamp.now(),
     });
     console.log('[Firestore] Post published successfully!');
